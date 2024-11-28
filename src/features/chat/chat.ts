@@ -10,16 +10,22 @@ import { getWindowAiChatResponseStream } from './windowAiChat';
 import { getOllamaChatResponseStream, getOllamaVisionChatResponse } from './ollamaChat';
 import { getKoboldAiChatResponseStream } from './koboldAiChat';
 
-import { piper} from "@/features/piper/piper";
+import { rvc } from "@/features/rvc/rvc";
+import { coquiLocal } from "@/features/coquiLocal/coquiLocal";
+import { piper } from "@/features/piper/piper";
 import { elevenlabs } from "@/features/elevenlabs/elevenlabs";
-import { coqui } from "@/features/coqui/coqui";
 import { speecht5 } from "@/features/speecht5/speecht5";
 import { openaiTTS } from "@/features/openaiTTS/openaiTTS";
 import { localXTTSTTS} from "@/features/localXTTS/localXTTS";
+
+import { AmicaLife } from '@/features/amicaLife/amicaLife';
+
 import { config } from "@/utils/config";
 import { cleanTalk } from "@/utils/cleanTalk";
 import { processResponse } from "@/utils/processResponse";
 import { wait } from "@/utils/wait";
+import { isCharacterIdle, characterIdleTime, resetIdleTimer } from "@/utils/isIdle";
+
 
 type Speak = {
   audioBuffer: ArrayBuffer|null;
@@ -35,6 +41,7 @@ type TTSJob = {
 export class Chat {
   public initialized: boolean;
 
+  public amicaLife?: AmicaLife;
   public viewer?: Viewer;
   public alert?: Alert;
 
@@ -43,7 +50,7 @@ export class Chat {
   public setAssistantMessage?: (message: string) => void;
   public setShownMessage?: (role: Role) => void;
   public setChatProcessing?: (processing: boolean) => void;
-
+  public setChatSpeaking?: (speaking: boolean) => void;
 
   // the message from the user that is currently being processed
   // it can be reset
@@ -64,9 +71,9 @@ export class Chat {
 
   private lastAwake: number;
 
-  private messageList: Message[];
+  public messageList: Message[];
 
-  private currentStreamIdx: number;
+  public currentStreamIdx: number;
 
   constructor() {
     this.initialized = false;
@@ -89,6 +96,7 @@ export class Chat {
   }
 
   public initialize(
+    amicaLife: AmicaLife,
     viewer: Viewer,
     alert: Alert,
     setChatLog: (messageLog: Message[]) => void,
@@ -96,7 +104,9 @@ export class Chat {
     setAssistantMessage: (message: string) => void,
     setShownMessage: (role: Role) => void,
     setChatProcessing: (processing: boolean) => void,
+    setChatSpeaking: (speaking: boolean) => void,
   ) {
+    this.amicaLife = amicaLife;
     this.viewer = viewer;
     this.alert = alert;
     this.setChatLog = setChatLog;
@@ -104,6 +114,7 @@ export class Chat {
     this.setAssistantMessage = setAssistantMessage;
     this.setShownMessage = setShownMessage;
     this.setChatProcessing = setChatProcessing;
+    this.setChatSpeaking = setChatSpeaking;
 
     // these will run forever
     this.processTtsJobs();
@@ -123,14 +134,43 @@ export class Chat {
     this.currentStreamIdx++;
   }
 
+  public async handleRvc(audio: any) {
+    const rvcModelName = config("rvc_model_name");
+    const rvcIndexPath = config("rvc_index_path");
+    const rvcF0upKey = parseInt(config("rvc_f0_upkey"));
+    const rvcF0Method = config("rvc_f0_method");
+    const rvcIndexRate = config("rvc_index_rate");
+    const rvcFilterRadius = parseInt(config("rvc_filter_radius"));
+    const rvcResampleSr = parseInt(config("rvc_resample_sr"));
+    const rvcRmsMixRate = parseInt(config("rvc_rms_mix_rate"));
+    const rvcProtect = parseInt(config("rvc_protect"));
+
+    const voice = await rvc(
+      audio,
+      rvcModelName,
+      rvcIndexPath,
+      rvcF0upKey,
+      rvcF0Method,
+      rvcIndexRate,
+      rvcFilterRadius,
+      rvcResampleSr,
+      rvcRmsMixRate,
+      rvcProtect);
+
+    return voice.audio;
+  }
+
+  public idleTime(): number {
+    return characterIdleTime(this.lastAwake);
+  }
+
   public isAwake() {
-    let sinceLastAwakeSec = ((new Date()).getTime() - this.lastAwake) / 1000;
-    let timeBeforeIdleSec = parseInt(config("wake_word_time_before_idle_sec"));
-    return sinceLastAwakeSec  < timeBeforeIdleSec;
+    return !isCharacterIdle(this.lastAwake);
   }
 
   public updateAwake() {
     this.lastAwake = (new Date()).getTime();
+    resetIdleTimer();
   }
 
   public async processTtsJobs() {
@@ -173,7 +213,6 @@ export class Chat {
         }
         console.debug('processing speak');
 
-
         if((window as any).chatvrm_latency_tracker) {
           if((window as any).chatvrm_latency_tracker.active) {
             const ms = +(new Date)-(window as any).chatvrm_latency_tracker.start;
@@ -182,10 +221,13 @@ export class Chat {
           };
         }
 
-        this.bubbleMessage('assistant', speak.screenplay.talk.message);
+        this.bubbleMessage("assistant",speak.screenplay.text);
+
         if (speak.audioBuffer) {
+          this.setChatSpeaking!(true);
           await this.viewer!.model?.speak(speak.audioBuffer, speak.screenplay);
-          this.updateAwake();
+          this.setChatSpeaking!(false);
+          this.isAwake() ? this.updateAwake() : null;
         }
       } while (this.speakJobs.size() > 0);
       await wait(50);
@@ -193,6 +235,8 @@ export class Chat {
   }
 
   public bubbleMessage(role: Role, text: string) {
+    // TODO: currentUser & Assistant message should be contain the message with emotion in it
+
     if (role === 'user') {
       // add space if there is already a partial message
       if (this.currentUserMessage !== '') {
@@ -218,9 +262,19 @@ export class Chat {
     }
 
     if (role === 'assistant') {
-      this.currentAssistantMessage += text;
-      this.setUserMessage!("");
-      this.setAssistantMessage!(this.currentAssistantMessage);
+      if (this.currentAssistantMessage != '' && !this.isAwake() && config("amica_life_enabled") === 'true') {
+        this.messageList!.push({
+          role: "assistant",
+          content: this.currentAssistantMessage,
+        });
+
+        this.currentAssistantMessage = text;
+        this.setAssistantMessage!(this.currentAssistantMessage);
+      } else {
+        this.currentAssistantMessage += text;
+        this.setUserMessage!("");
+        this.setAssistantMessage!(this.currentAssistantMessage);
+      }
 
       if (this.currentUserMessage !== '') {
         this.messageList!.push({
@@ -264,31 +318,38 @@ export class Chat {
   }
 
   // this happens either from text or from voice / whisper completion
-  public async receiveMessageFromUser(message: string) {
-    console.log('receiveMessageFromUser', message)
+  public async receiveMessageFromUser(message: string, amicaLife: boolean) {
     if (message === null || message === "") {
       return;
-    }
-    if (config("wake_word_enabled")) {
-      this.updateAwake();
     }
 
     console.time('performance_interrupting');
     console.debug('interrupting...');
-    await this.interrupt();
+    await this.interrupt(); 
     console.timeEnd('performance_interrupting');
     await wait(0);
     console.debug('wait complete');
 
-    this.bubbleMessage!('user', message);
+    if (!amicaLife) {
+      console.log('receiveMessageFromUser', message);
+
+      this.amicaLife?.receiveMessageFromUser(message);
+
+      if (!/\[.*?\]/.test(message)) {
+        message = `[neutral] ${message}`;
+      }
+
+      this.updateAwake();
+      this.bubbleMessage("user",message);
+    } 
 
     // make new stream
     const messages: Message[] = [
       { role: "system", content: config("system_prompt") },
       ...this.messageList!,
-      { role: "user", content: this.currentUserMessage},
+      { role: "user", content: amicaLife ? message : this.currentUserMessage},
     ];
-    console.debug('messages', messages);
+    // console.debug('messages', messages);
 
     await this.makeAndHandleStream(messages);
   }
@@ -311,7 +372,7 @@ export class Chat {
       return errMsg;
     }
 
-    await this.handleChatResponseStream();
+    return await this.handleChatResponseStream();
   }
 
   public async handleChatResponseStream() {
@@ -391,6 +452,7 @@ export class Chat {
         if (proc.shouldBreak) {
           break;
         }
+        
       }
     } catch (e: any) {
       const errMsg = e.toString();
@@ -419,6 +481,8 @@ export class Chat {
       return null;
     }
 
+    const rvcEnabled = config("rvc_enabled") === 'true';
+
     try {
       switch (config("tts_backend")) {
         case 'none': {
@@ -427,27 +491,32 @@ export class Chat {
         case 'elevenlabs': {
           const voiceId = config("elevenlabs_voiceid");
           const voice = await elevenlabs(talk.message, voiceId, talk.style);
+          if (rvcEnabled) { return await this.handleRvc(voice.audio) }
           return voice.audio;
         }
         case 'speecht5': {
           const speakerEmbeddingUrl = config('speecht5_speaker_embedding_url');
           const voice = await speecht5(talk.message, speakerEmbeddingUrl);
-          return voice.audio;
-        }
-        case 'coqui': {
-          const voiceId = config('coqui_voice_id');
-          const voice = await coqui(talk.message, voiceId, talk.style);
+          if (rvcEnabled) { return await this.handleRvc(voice.audio) }
           return voice.audio;
         }
         case 'openai_tts': {
           const voice = await openaiTTS(talk.message);
+          if (rvcEnabled) { return await this.handleRvc(voice.audio) }
           return voice.audio;
         }
         case 'localXTTS': {
           const voice = await localXTTSTTS(talk.message);
+          if (rvcEnabled) { return await this.handleRvc(voice.audio) }
+          return voice.audio;
         }
         case 'piper': {
           const voice = await piper(talk.message);
+          if (rvcEnabled) { return await this.handleRvc(voice.audio) }
+          return voice.audio;
+        }
+        case 'coquiLocal': {
+          const voice = await coquiLocal(talk.message);
           return voice.audio;
         }
       }
@@ -517,4 +586,5 @@ export class Chat {
       this.alert?.error("Failed to get vision response", e.toString());
     }
   }
+
 }

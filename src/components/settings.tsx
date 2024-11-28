@@ -43,10 +43,12 @@ import { KoboldAiSettingsPage } from './settings/KoboldAiSettingsPage';
 import { TTSBackendPage } from './settings/TTSBackendPage';
 import { ElevenLabsSettingsPage } from './settings/ElevenLabsSettingsPage';
 import { SpeechT5SettingsPage } from './settings/SpeechT5SettingsPage';
-import { CoquiSettingsPage } from './settings/CoquiSettingsPage';
 import { OpenAITTSSettingsPage } from './settings/OpenAITTSSettingsPage';
-
 import { PiperSettingsPage } from './settings/PiperSettingsPage';
+import { CoquiLocalSettingsPage } from './settings/CoquiLocalSettingsPage';
+import { LocalXTTSSettingsPage } from "./settings/LocalXTTSSettingsPage";
+
+import { RVCSettingsPage } from './settings/RVCSettingsPage';
 
 import { STTBackendPage } from './settings/STTBackendPage';
 import { STTWakeWordSettingsPage } from './settings/STTWakeWordSettingsPage';
@@ -61,6 +63,7 @@ import { VisionSystemPromptPage } from './settings/VisionSystemPromptPage';
 
 import { NamePage } from './settings/NamePage';
 import { SystemPromptPage } from './settings/SystemPromptPage';
+import { AmicaLifePage } from "./settings/AmicaLifePage";
 import { useVrmStoreContext } from "@/features/vrmStore/vrmStoreContext";
 
 export const Settings = ({
@@ -95,15 +98,29 @@ export const Settings = ({
 
   const [speechT5SpeakerEmbeddingsUrl, setSpeechT5SpeakerEmbeddingsUrl] = useState(config("speecht5_speaker_embedding_url"));
 
-  const [coquiApiKey, setCoquiApiKey] = useState(config("coqui_apikey"));
-  const [coquiVoiceId, setCoquiVoiceId] = useState(config("coqui_voice_id"));
-
   const [openAITTSApiKey, setOpenAITTSApiKey] = useState(config("openai_tts_apikey"));
   const [openAITTSUrl, setOpenAITTSUrl] = useState(config("openai_tts_url"));
   const [openAITTSModel, setOpenAITTSModel] = useState(config("openai_tts_model"));
   const [openAITTSVoice, setOpenAITTSVoice] = useState(config("openai_tts_voice"));
 
   const [piperUrl, setPiperUrl] = useState(config("piper_url"));
+
+  const [rvcUrl, setRvcUrl] = useState(config("rvc_url"));
+  const [rvcEnabled, setRvcEnabled] = useState<boolean>(config("rvc_enabled") === 'true' ? true : false);
+  const [rvcModelName, setRvcModelName] = useState(config("rvc_model_name"));
+  const [rvcIndexPath, setRvcIndexPath] = useState(config("rvc_index_path"));
+  const [rvcF0upKey, setRvcF0UpKey] = useState<number>(parseInt(config("rvc_f0_upkey")));
+  const [rvcF0Method, setRvcF0Method] = useState(config("rvc_f0_method"));
+  const [rvcIndexRate, setRvcIndexRate] = useState(config("rvc_index_rate"));
+  const [rvcFilterRadius, setRvcFilterRadius] = useState<number>(parseInt(config("rvc_filter_radius")));
+  const [rvcResampleSr, setRvcResampleSr] = useState<number>(parseInt(config("rvc_resample_sr")));
+  const [rvcRmsMixRate, setRvcRmsMixRate] = useState<number>(parseInt(config("rvc_rms_mix_rate")));
+  const [rvcProtect, setRvcProtect] = useState<number>(parseInt(config("rvc_protect")));
+
+  const [coquiLocalUrl, setCoquiLocalUrl] = useState(config("coquiLocal_url"));
+  const [coquiLocalVoiceId, setCoquiLocalVoiceId] = useState(config("coquiLocal_voiceid"));
+
+  const [localXTTSUrl, setLocalXTTSUrl] = useState(config("localXTTS_url"));
 
   const [visionBackend, setVisionBackend] = useState(config("vision_backend"));
   const [visionLlamaCppUrl, setVisionLlamaCppUrl] = useState(config("vision_llamacpp_url"));
@@ -122,12 +139,18 @@ export const Settings = ({
   const [sttBackend, setSTTBackend] = useState(config("stt_backend"));
   const [sttWakeWordEnabled, setSTTWakeWordEnabled] = useState<boolean>(config("wake_word_enabled") === 'true' ? true : false);
   const [sttWakeWord, setSTTWakeWord] = useState(config("wake_word"));
-  const [sttWakeWordIdleTime, setSTTWakeWordIdleTime] = useState<number>(parseInt(config("wake_word_time_before_idle_sec")));
   
   const [whisperOpenAIUrl, setWhisperOpenAIUrl] = useState(config("openai_whisper_url"));
   const [whisperOpenAIApiKey, setWhisperOpenAIApiKey] = useState(config("openai_whisper_apikey"));
   const [whisperOpenAIModel, setWhisperOpenAIModel] = useState(config("openai_whisper_model"));
   const [whisperCppUrl, setWhisperCppUrl] = useState(config("whispercpp_url"));
+
+  const [amicaLifeEnabled,setAmicaLifeEnabled] = useState<boolean>(config("amica_life_enabled") === 'true' ? true : false);
+  const [timeBeforeIdle, setTimeBeforeIdle] = useState<number>(parseInt(config("time_before_idle_sec")));
+  const [minTimeInterval,setMinTimeInterval] = useState<number>(parseInt(config("min_time_interval_sec")));
+  const [maxTimeInterval, setMaxTimeInterval] = useState<number>(parseInt(config("max_time_interval_sec")));
+  const [timeToSleep, setTimeToSleep] = useState<number>(parseInt(config("time_to_sleep_sec")));
+  const [idleTextPrompt, setIdleTextPrompt] = useState(config("idle_text_prompt"));
 
   const [name, setName] = useState(config("name"));
   const [systemPrompt, setSystemPrompt] = useState(config("system_prompt"));
@@ -196,6 +219,13 @@ export const Settings = ({
   }
 
   useEffect(() => {
+    // Change the chatbot to 'llamacpp' if Amica Life is enabled and previous chatbot was 'echo'
+    if (amicaLifeEnabled && chatbotBackend === "echo") {
+      setAmicaLifeEnabled(false);
+    }
+  }, [chatbotBackend, amicaLifeEnabled]);
+
+  useEffect(() => {
     const timeOutId = setTimeout(() => {
       if (settingsUpdated) {
         setShowNotification(true);
@@ -214,9 +244,11 @@ export const Settings = ({
     ttsBackend,
     elevenlabsApiKey, elevenlabsVoiceId,
     speechT5SpeakerEmbeddingsUrl,
-    coquiApiKey, coquiVoiceId,
     openAITTSApiKey, openAITTSUrl, openAITTSModel, openAITTSVoice,
     piperUrl,
+    rvcUrl,rvcEnabled,rvcModelName,rvcIndexPath,rvcF0upKey,rvcF0Method,rvcIndexRate,rvcFilterRadius,,rvcResampleSr,rvcRmsMixRate,rvcProtect,
+    coquiLocalUrl,coquiLocalVoiceId,
+    localXTTSUrl,
     visionBackend,
     visionLlamaCppUrl,
     visionOllamaUrl, visionOllamaModel,
@@ -226,9 +258,10 @@ export const Settings = ({
     sttBackend,
     whisperOpenAIApiKey, whisperOpenAIModel, whisperOpenAIUrl,
     whisperCppUrl,
+    amicaLifeEnabled, timeBeforeIdle, minTimeInterval, maxTimeInterval, timeToSleep, idleTextPrompt,
     name,
     systemPrompt,
-    sttWakeWordEnabled, sttWakeWord, sttWakeWordIdleTime
+    sttWakeWordEnabled, sttWakeWord,
   ]);
 
 
@@ -241,7 +274,7 @@ export const Settings = ({
     switch(page) {
     case 'main_menu':
       return <MenuPage
-        keys={["appearance", "chatbot", "tts", "stt", "vision", "reset_settings", "community"]}
+        keys={["appearance",  "amica_life", "chatbot", "tts", "stt", "vision", "reset_settings", "community"]}
         menuClick={handleMenuClick} />;
 
     case 'appearance':
@@ -256,7 +289,7 @@ export const Settings = ({
 
     case 'tts':
       return <MenuPage
-        keys={["tts_backend", "elevenlabs_settings", "speecht5_settings", "coqui_settings", "openai_tts_settings", "piper_settings"]}
+        keys={["tts_backend", "elevenlabs_settings", "speecht5_settings", "coquiLocal_settings", "openai_tts_settings", "piper_settings", "localXTTS_settings", "rvc_settings"]}
         menuClick={handleMenuClick} />;
 
     case 'stt':
@@ -395,15 +428,6 @@ export const Settings = ({
         setSettingsUpdated={setSettingsUpdated}
         />
 
-    case 'coqui_settings':
-      return <CoquiSettingsPage
-        coquiApiKey={coquiApiKey}
-        setCoquiApiKey={setCoquiApiKey}
-        coquiVoiceId={coquiVoiceId}
-        setCoquiVoiceId={setCoquiVoiceId}
-        setSettingsUpdated={setSettingsUpdated}
-        />
-
     case 'openai_tts_settings':
       return <OpenAITTSSettingsPage
         openAITTSApiKey={openAITTSApiKey}
@@ -423,6 +447,49 @@ export const Settings = ({
         setPiperUrl={setPiperUrl}
         setSettingsUpdated={setSettingsUpdated}
         />
+    
+    case 'coquiLocal_settings':
+      return <CoquiLocalSettingsPage
+        coquiLocalUrl={coquiLocalUrl}
+        coquiLocalVoiceId={coquiLocalVoiceId}
+        setCoquiLocalVoiceId={setCoquiLocalVoiceId}
+        setCoquiLocalUrl={setCoquiLocalUrl}
+        setSettingsUpdated={setSettingsUpdated}
+        />
+
+    case 'localXTTS_settings':
+      return <LocalXTTSSettingsPage
+        localXTTSUrl={localXTTSUrl}
+        setLocalXTTSUrl={setLocalXTTSUrl}
+        setSettingsUpdated={setSettingsUpdated}
+        />
+
+    case 'rvc_settings':
+      return <RVCSettingsPage
+        rvcUrl={rvcUrl}
+        rvcEnabled={rvcEnabled}
+        rvcModelName={rvcModelName}
+        rvcIndexPath={rvcIndexPath}
+        rvcF0upKey={rvcF0upKey}
+        rvcF0Method={rvcF0Method}
+        rvcIndexRate={rvcIndexRate}
+        rvcFilterRadius={rvcFilterRadius}
+        rvcResampleSr={rvcResampleSr}
+        rvcRmsMixRate={rvcRmsMixRate}
+        rvcProtect={rvcProtect}
+        setRvcUrl={setRvcUrl}
+        setRvcEnabled={setRvcEnabled}
+        setRvcModelName={setRvcModelName}
+        setRvcIndexPath={setRvcIndexPath}
+        setRvcF0upKey={setRvcF0UpKey}
+        setRvcF0Method={setRvcF0Method}
+        setRvcIndexRate={setRvcIndexRate}
+        setRvcFilterRadius={setRvcFilterRadius}
+        setRvcResampleSr={setRvcResampleSr}
+        setRvcRmsMixRate={setRvcRmsMixRate}
+        setRvcProtect={setRvcProtect}
+        setSettingsUpdated={setSettingsUpdated}
+        />
 
     case'stt_backend':
       return <STTBackendPage
@@ -438,10 +505,10 @@ export const Settings = ({
       return <STTWakeWordSettingsPage
         sttWakeWordEnabled={sttWakeWordEnabled}
         sttWakeWord={sttWakeWord}
-        sttWakeWordIdleTime={sttWakeWordIdleTime}
+        timeBeforeIdle={timeBeforeIdle}
         setSTTWakeWordEnabled={setSTTWakeWordEnabled}
         setSTTWakeWord={setSTTWakeWord}
-        setSTTWakeWordIdleTime={setSTTWakeWordIdleTime}
+        setTimeBeforeIdle={setTimeBeforeIdle}
         setSettingsUpdated={setSettingsUpdated}
         />
 
@@ -507,6 +574,23 @@ export const Settings = ({
       return <NamePage
         name={name}
         setName={setName}
+        setSettingsUpdated={setSettingsUpdated}
+        />
+
+    case 'amica_life':
+      return <AmicaLifePage
+        amicaLifeEnabled={amicaLifeEnabled}
+        timeBeforeIdle={timeBeforeIdle}
+        minTimeInterval={minTimeInterval}
+        maxTimeInterval={maxTimeInterval}
+        timeToSleep={timeToSleep}
+        idleTextPrompt={idleTextPrompt}
+        setAmicaLifeEnabled={setAmicaLifeEnabled}
+        setTimeBeforeIdle={setTimeBeforeIdle}
+        setMinTimeInterval={setMinTimeInterval}
+        setMaxTimeInterval={setMaxTimeInterval}
+        setTimeToSleep={setTimeToSleep}
+        setIdleTextPrompt={setIdleTextPrompt}
         setSettingsUpdated={setSettingsUpdated}
         />
 
